@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 from aiogram import Bot, Dispatcher, Router
 from aiogram.filters import Command
 from aiogram.types import (
@@ -10,48 +13,9 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from decouple import config
-import json
-import asyncio
-import logging
+
 from wildberries_api import validate_api_key, get_sales_report, calculate_key_metrics
-
-# Config file for storing shops
-import json
-import logging
-
-# Пути к файлам конфигурации
-CONFIG_FILE_WITH_PREFIX = "config_with_prefix.json"
-CONFIG_FILE_WITHOUT_PREFIX = "config_without_prefix.json"
-
-
-def save_config(data):
-    # Сохраняем с префиксом
-    prefix = "shop_"
-    data_with_prefix = {
-        prefix + shop_name: api_key for shop_name, api_key in data.items()
-    }
-    with open(CONFIG_FILE_WITH_PREFIX, "w") as file_with_prefix:
-        json.dump(data_with_prefix, file_with_prefix, indent=4)
-
-    # Сохраняем без префикса
-    with open(CONFIG_FILE_WITHOUT_PREFIX, "w") as file_without_prefix:
-        json.dump(data, file_without_prefix, indent=4)
-
-    logging.info("Конфигурация сохранена в обоих форматах.")
-
-
-def load_config(with_prefix=True):
-    try:
-        file_path = (
-            CONFIG_FILE_WITH_PREFIX if with_prefix else CONFIG_FILE_WITHOUT_PREFIX
-        )
-        with open(file_path, "r") as file:
-            data = json.load(file)
-            logging.info(f"Конфигурация загружена из {file_path}: {data}")
-            return data
-    except FileNotFoundError:
-        logging.error(f"Файл {file_path} не найден.")
-        return {}
+from utils import load_config, save_config
 
 
 # Configure logging
@@ -100,6 +64,7 @@ async def send_welcome(message: Message):
     )
 
 
+#! ----------------- ADDSHOPS -----------------
 @router.message(Command("addshop"))
 async def add_shop(message: Message, state: FSMContext):
     await message.answer("Введите API ключ вашего магазина Wildberries:")
@@ -142,38 +107,10 @@ async def get_shop_name(msg: Message, state: FSMContext):
     await state.set_state(None)  # Correct way to finish the FSM state
 
 
-@router.message(Command("delshop"))
-async def delete_shop(message: Message):
-    config = load_config()
-    if not config:
-        await message.answer("Нет сохраненных магазинов для удаления.")
-        return
-
-    try:
-        buttons = [
-            InlineKeyboardButton(text=str(name), callback_data=str(name))
-            for name in config.keys()
-        ]
-
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[buttons])
-        await message.answer("Выберите магазин для удаления:", reply_markup=keyboard)
-    except Exception as e:
-        logging.error(f"Ошибка при создании кнопок для удаления магазина: {e}")
-        await message.answer(f"Ошибка при создании кнопок: {e}")
+#! ----------------- ADDSHOPS -----------------
 
 
-# @router.callback_query()
-# async def handle_shop_deletion(callback_query: CallbackQuery):
-#     shop_name = callback_query.data
-#     config = load_config()
-#     if shop_name in config:
-#         del config[shop_name]
-#         save_config(config)
-#         await callback_query.message.edit_text(f"Магазин {shop_name} удален.")
-#     else:
-#         await callback_query.message.edit_text("Магазин не найден.")
-
-
+# ! -------------------SHOPS--------------------
 @router.message(Command("shops"))
 async def list_shops(message: Message):
     config = load_config()
@@ -184,7 +121,84 @@ async def list_shops(message: Message):
         await message.answer(f"Сохраненные магазины:\n{shop_list}")
 
 
-#! ///////////////REPOTR///////////////////
+# ! -------------------SHOPS--------------------
+
+
+# ! -------------------DELSHOP--------------------
+@router.message(Command("delshop"))
+async def delete_shop(message: Message):
+    config = load_config()
+    if not config:
+        await message.answer("Нет сохраненных магазинов для удаления.")
+        return
+
+    try:
+        buttons = [
+            InlineKeyboardButton(text=str(name), callback_data=f"delshop_{name}")
+            for name in config.keys()
+        ]
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[buttons])
+        await message.answer("Выберите магазин для удаления:", reply_markup=keyboard)
+    except Exception as e:
+        logging.error(f"Ошибка при создании кнопок для удаления магазина: {e}")
+        await message.answer(f"Ошибка при создании кнопок: {e}")
+
+
+@router.callback_query(
+    lambda callback_query: callback_query.data.startswith("delshop_")
+)
+async def handle_shop_deletion(callback_query: CallbackQuery):
+    shop_name = callback_query.data.split("_", 1)[1]  # Извлекаем имя магазина
+    config = load_config()
+
+    if shop_name in config:
+        # Отправляем сообщение с подтверждением
+        confirm_buttons = [
+            InlineKeyboardButton(
+                text="Да, удалить", callback_data=f"confirm_delshop_{shop_name}"
+            ),
+            InlineKeyboardButton(
+                text="Отмена", callback_data=f"cancel_delshop_{shop_name}"
+            ),
+        ]
+        confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[confirm_buttons])
+
+        await callback_query.message.edit_text(
+            f"Вы уверены, что хотите удалить магазин {shop_name}?",
+            reply_markup=confirm_keyboard,
+        )
+    else:
+        await callback_query.message.edit_text("Магазин не найден.")
+
+
+@router.callback_query(
+    lambda callback_query: callback_query.data.startswith("confirm_delshop_")
+)
+async def confirm_shop_deletion(callback_query: CallbackQuery):
+    shop_name = callback_query.data.split("_", 2)[2]  # Извлекаем имя магазина
+    config = load_config()
+
+    if shop_name in config:
+        del config[shop_name]
+        save_config(config)
+        await callback_query.message.edit_text(f"Магазин {shop_name} удален.")
+    else:
+        await callback_query.message.edit_text("Магазин не найден.")
+
+
+@router.callback_query(
+    lambda callback_query: callback_query.data.startswith("cancel_delshop_")
+)
+async def cancel_shop_deletion(callback_query: CallbackQuery):
+    shop_name = callback_query.data.split("_", 2)[2]  # Извлекаем имя магазина
+    await callback_query.message.edit_text(f"Удаление магазина {shop_name} отменено.")
+
+
+# ! -------------------DELSHOP--------------------
+
+
+#! -------------------------------------- REPOTR --------------------------------------
 @router.message(Command("report"))
 async def get_report(message: Message, state: FSMContext):
     config = load_config()
@@ -279,34 +293,30 @@ async def handle_report_period(callback_query: CallbackQuery, state: FSMContext)
         return
 
     try:
-        # Получаем отчет с использованием указанного периода
         report_data = get_sales_report(shop_api_key[shop_name], period)
+        # Если данные не в списке, возможно, их нужно преобразовать
+        if isinstance(report_data, dict) and "reports" in report_data:
+            report_data = report_data["reports"]
 
-        # Если данные приходят как список
-        if isinstance(report_data, list):
-            if report_data:  # Если список не пуст
-                report_data = {
-                    "reports": report_data
-                }  # Преобразуем в словарь с ключом "reports"
-            else:
-                logging.error("Список отчета пуст.")
-                await bot.answer_callback_query(
-                    callback_query.id, "Нет данных для отчета."
-                )
-                return
-
-        if not isinstance(report_data, dict):
-            raise ValueError("Ожидался словарь с данными отчета.")
-
-        # Обрабатываем данные отчета
+        # Рассчитываем ключевые показатели
         key_metrics = calculate_key_metrics(report_data)
 
         # Форматируем отчет
         report = format_report(key_metrics)
 
-        await bot.answer_callback_query(callback_query.id)
         await bot.send_message(
             callback_query.from_user.id, report, parse_mode="Markdown"
+        )
+        await state.set_state(None)  # Завершаем состояние FSM
+
+    except AttributeError as e:
+        # Специальная обработка ошибки AttributeError (NoneType)
+        logging.error(f"Ошибка при получении отчета для магазина {shop_name}: {e}")
+        await bot.answer_callback_query(
+            callback_query.id, "К сожалению, за выбранный период данных нет."
+        )
+        await bot.send_message(
+            callback_query.from_user.id, "К сожалению, за выбранный период данных нет."
         )
 
     except Exception as e:
@@ -356,6 +366,10 @@ async def handle_end_date(message: Message, state: FSMContext):
         await bot.send_message(message.chat.id, report, parse_mode="Markdown")
         await state.set_state(None)  # Завершаем состояние FSM
 
+    except AttributeError as e:
+        logging.error(f"Ошибка при получении отчета для магазина {shop_name}: {e}")
+        await message.answer("К сожалению, за выбранный период данных нет.")
+
     except Exception as e:
         logging.error(f"Ошибка при получении отчета для магазина {shop_name}: {e}")
         await message.answer(f"Ошибка при получении отчета: {e}")
@@ -363,20 +377,23 @@ async def handle_end_date(message: Message, state: FSMContext):
 
 # Utility function to format the report
 def format_report(key_metrics):
+    def format_number(value):
+        return round(value, 2) if isinstance(value, (int, float)) else value
+
     report = (
-        f"**Отчёт о продажах:**\n\n"
-        f"Общая сумма продаж: {key_metrics.get('total_sales', 'N/A')}\n"
-        f"Процент скидки: {key_metrics.get('total_discount', 'N/A')}\n"
-        f"SPP: {key_metrics.get('spp', 'N/A')}\n"
-        f"Сумма оплаты: {key_metrics.get('payment_sale_amount', 'N/A')}\n"
-        f"Сумма для оплаты: {key_metrics.get('for_pay', 'N/A')}\n"
-        f"Финальная цена: {key_metrics.get('finished_price', 'N/A')}\n"
-        f"Цена со скидкой: {key_metrics.get('price_with_disc', 'N/A')}\n"
+        "*📊 Отчёт о продажах:*\n\n"
+        f"• *Общая сумма продаж:* {format_number(key_metrics.get('total_sales', 'N/A'))}\n"
+        f"• *Процент скидки:* {format_number(key_metrics.get('total_discount', 'N/A'))}\n\n"
+        f"• *SPP:* {format_number(key_metrics.get('spp', 'N/A'))}\n"
+        f"• *Сумма оплаты:* {format_number(key_metrics.get('payment_sale_amount', 'N/A'))}\n"
+        f"• *Сумма для оплаты:* {format_number(key_metrics.get('for_pay', 'N/A'))}\n\n"
+        f"• *Финальная цена:* {format_number(key_metrics.get('finished_price', 'N/A'))}\n"
+        f"• *Цена со скидкой:* {format_number(key_metrics.get('price_with_disc', 'N/A'))}\n"
     )
     return report
 
 
-#! ///////////////REPOTR///////////////////
+#! -------------------------------------- REPOTR --------------------------------------
 
 
 async def main():
