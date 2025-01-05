@@ -3,7 +3,6 @@ import logging
 import datetime
 import logging
 import requests
-import json
 
 # Настройка логирования
 logging.basicConfig(
